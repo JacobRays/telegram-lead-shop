@@ -1,4 +1,6 @@
 import os
+print("PAYPAL_EMAIL:", os.getenv("PAYPAL_EMAIL"))
+import os
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
