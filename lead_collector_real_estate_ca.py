@@ -17,7 +17,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Telegram bot token from env variable
-BOT_TOKEN = os.getenv("8430415994:AAFdWufK28f6dxCufERyWxfyE1QFCXizo6E")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN environment variable not set.")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7352016327"))  # Your Telegram user ID
 PAYPAL_EMAIL = os.getenv("PAYPAL_EMAIL", "premiumrays01@gmail.com")
 BASE_URL = os.getenv("https://telegram-lead-shop.onrender.com")  # Your Render app URL e.g. https://yourapp.onrender.com
