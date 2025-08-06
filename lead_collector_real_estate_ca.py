@@ -1,4 +1,5 @@
 import os
+print("🔍 ENV DUMP:", dict(os.environ))
 print("BOT_TOKEN:", os.environ.get("BOT_TOKEN"))
 import json
 import logging
