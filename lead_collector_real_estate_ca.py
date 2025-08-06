@@ -1,13 +1,18 @@
 import os
-print("🔍 ENV DUMP:", dict(os.environ))
-print("BOT_TOKEN:", os.environ.get("BOT_TOKEN"))
 import json
 import logging
 from flask import Flask, request, Response
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+)
 from threading import Thread
 import requests
+import asyncio
+from urllib.parse import urlencode
 
 # Logging setup
 logging.basicConfig(
@@ -16,13 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Telegram bot token from env variable
+# Telegram bot token from env variable (fix: use getenv with key "BOT_TOKEN")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN environment variable not set.")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "7352016327"))  # Your Telegram user ID
+ADMIN_ID = int(os.getenv("ADMIN_ID", "7352016327"))  # Your Telegram user ID as fallback
 PAYPAL_EMAIL = os.getenv("PAYPAL_EMAIL", "premiumrays01@gmail.com")
-BASE_URL = os.getenv("https://telegram-lead-shop.onrender.com")  # Your Render app URL e.g. https://yourapp.onrender.com
+BASE_URL = os.getenv("BASE_URL", "https://telegram-lead-shop.onrender.com")  # Your Render app URL
 
 # Lead categories: label, price, filename
 LEAD_CATEGORIES = {
@@ -40,6 +43,7 @@ user_orders = {}
 
 # Telegram bot setup
 telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
 
 # ===== Telegram Handlers =====
 
@@ -118,8 +122,6 @@ async def category_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def generate_paypal_link(chat_id, total):
-    # PayPal payment link using "Buy Now" button parameters
-    # 'item_name' encodes the chat_id for tracking, you can improve this with unique order IDs
     base = "https://www.paypal.com/cgi-bin/webscr"
     params = {
         "cmd": "_xclick",
@@ -132,40 +134,31 @@ def generate_paypal_link(chat_id, total):
         "cancel_return": f"{BASE_URL}/payment_cancel?chat_id={chat_id}",
         "notify_url": f"{BASE_URL}/paypal_ipn",
     }
-    from urllib.parse import urlencode
     return f"{base}?{urlencode(params)}"
 
 
 @app.route("/paypal_ipn", methods=["POST"])
 def paypal_ipn():
-    # PayPal IPN message validation and order processing
     ipn_data = request.form.to_dict()
     logger.info(f"Received IPN: {ipn_data}")
 
-    # Prepare 'cmd' param to validate IPN with PayPal
     verify_params = {"cmd": "_notify-validate"}
     verify_params.update(ipn_data)
 
-    # Verify IPN with PayPal
     resp = requests.post("https://ipnpb.paypal.com/cgi-bin/webscr", data=verify_params)
     if resp.text != "VERIFIED":
         logger.warning("IPN Verification failed")
         return Response("IPN Verification failed", status=400)
 
-    # Check payment status
     payment_status = ipn_data.get("payment_status")
     if payment_status != "Completed":
         logger.info(f"Payment not completed: {payment_status}")
         return Response("Payment not completed", status=200)
 
-    # Extract buyer info
     item_name = ipn_data.get("item_name", "")
     txn_id = ipn_data.get("txn_id", "")
-    payer_email = ipn_data.get("payer_email", "")
     mc_gross = ipn_data.get("mc_gross", "")
-    custom = ipn_data.get("custom", "")  # if you use custom
 
-    # Extract chat_id from item_name (expects format leads_purchase_<chat_id>)
     if not item_name.startswith("leads_purchase_"):
         logger.warning("Invalid item_name format")
         return Response("Invalid item_name format", status=400)
@@ -176,7 +169,6 @@ def paypal_ipn():
         logger.error(f"Invalid chat_id in item_name: {e}")
         return Response("Invalid chat_id", status=400)
 
-    # Verify total amount
     if chat_id not in user_orders:
         logger.warning(f"No order found for chat_id {chat_id}")
         return Response("Order not found", status=404)
@@ -186,16 +178,13 @@ def paypal_ipn():
         logger.warning(f"Payment amount mismatch: {mc_gross} vs {order['total']}")
         return Response("Amount mismatch", status=400)
 
-    # Check if this txn_id was already processed (avoid duplicates)
     if order.get("txn_id") == txn_id:
         logger.info(f"Duplicate txn_id {txn_id} ignored")
         return Response("Duplicate txn", status=200)
 
-    # Mark order as paid
     order["paid"] = True
     order["txn_id"] = txn_id
 
-    # Send lead files to buyer in a new thread (to avoid blocking IPN)
     Thread(target=send_leads_to_buyer, args=(chat_id,)).start()
 
     logger.info(f"Payment verified for chat_id {chat_id}, txn_id {txn_id}")
@@ -203,8 +192,6 @@ def paypal_ipn():
 
 
 def send_leads_to_buyer(chat_id):
-    import asyncio
-
     async def send_files():
         bot = telegram_app.bot
         order = user_orders.get(chat_id)
@@ -236,20 +223,15 @@ def send_leads_to_buyer(chat_id):
     asyncio.run(send_files())
 
 
-@telegram_app.command("start")
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start(update, context)
+# Register handlers properly
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("buy", buy))
+telegram_app.add_handler(CallbackQueryHandler(category_toggle))
 
-@telegram_app.command("buy")
-async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await buy(update, context)
-
-@telegram_app.callback_query_handler()
-async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await category_toggle(update, context)
 
 def run_telegram_bot():
     telegram_app.run_polling()
+
 
 # Run Flask and Telegram bot in parallel
 if __name__ == "__main__":
