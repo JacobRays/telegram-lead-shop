@@ -1,4 +1,5 @@
 import os
+print("BOT_TOKEN:", os.environ.get("BOT_TOKEN"))
 import json
 import logging
 from flask import Flask, request, Response
