@@ -1,3 +1,5 @@
+import sys
+print("Running Python version:", sys.version)
 import os
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
