@@ -9,7 +9,6 @@ from telegram.ext import (
     CallbackQueryHandler,
     ContextTypes,
 )
-from threading import Thread
 import requests
 import asyncio
 from urllib.parse import urlencode
@@ -21,7 +20,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Telegram bot token from env variable (fix: use getenv with key "BOT_TOKEN")
+# Telegram bot token from env variable
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7352016327"))  # Your Telegram user ID as fallback
 PAYPAL_EMAIL = os.getenv("PAYPAL_EMAIL", "premiumrays01@gmail.com")
@@ -185,57 +184,66 @@ def paypal_ipn():
     order["paid"] = True
     order["txn_id"] = txn_id
 
-    Thread(target=send_leads_to_buyer, args=(chat_id,)).start()
+    # Send leads asynchronously
+    asyncio.run(send_leads_to_buyer(chat_id))
 
     logger.info(f"Payment verified for chat_id {chat_id}, txn_id {txn_id}")
     return Response("OK", status=200)
 
 
-def send_leads_to_buyer(chat_id):
-    async def send_files():
-        bot = telegram_app.bot
-        order = user_orders.get(chat_id)
-        if not order or not order.get("paid"):
-            logger.error(f"Order not paid or not found for chat_id {chat_id}")
-            return
+async def send_leads_to_buyer(chat_id):
+    bot = telegram_app.bot
+    order = user_orders.get(chat_id)
+    if not order or not order.get("paid"):
+        logger.error(f"Order not paid or not found for chat_id {chat_id}")
+        return
 
-        categories = order["categories"]
-        if not categories:
-            logger.error(f"No categories found in order for chat_id {chat_id}")
-            return
+    categories = order["categories"]
+    if not categories:
+        logger.error(f"No categories found in order for chat_id {chat_id}")
+        return
 
-        for cat_key in categories:
-            cat = LEAD_CATEGORIES[cat_key]
-            filename = cat["file"]
-            if not os.path.isfile(filename):
-                await bot.send_message(chat_id, f"⚠️ Lead file not found: {filename}")
-                continue
-            try:
-                with open(filename, "rb") as f:
-                    await bot.send_document(
-                        chat_id=chat_id,
-                        document=InputFile(f),
-                        caption=f"Here is your {cat['label']} leads file. Thank you for your purchase!"
-                    )
-            except Exception as e:
-                logger.error(f"Error sending file {filename} to {chat_id}: {e}")
-
-    asyncio.run(send_files())
+    for cat_key in categories:
+        cat = LEAD_CATEGORIES[cat_key]
+        filename = cat["file"]
+        if not os.path.isfile(filename):
+            await bot.send_message(chat_id, f"⚠️ Lead file not found: {filename}")
+            continue
+        try:
+            with open(filename, "rb") as f:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=InputFile(f),
+                    caption=f"Here is your {cat['label']} leads file. Thank you for your purchase!"
+                )
+        except Exception as e:
+            logger.error(f"Error sending file {filename} to {chat_id}: {e}")
 
 
-# Register handlers properly
+# Register handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("buy", buy))
 telegram_app.add_handler(CallbackQueryHandler(category_toggle))
 
 
-def run_telegram_bot():
-    telegram_app.run_polling()
+@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+async def webhook_handler():
+    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+    await telegram_app.process_update(update)
+    return "OK"
 
 
-# Run Flask and Telegram bot in parallel
 if __name__ == "__main__":
-    from threading import Thread
+    import asyncio
 
-    Thread(target=lambda: app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))).start()
-    run_telegram_bot()
+    webhook_url = f"{BASE_URL}/webhook/{BOT_TOKEN}"
+
+    async def setup_webhook():
+        await telegram_app.bot.delete_webhook()
+        await telegram_app.bot.set_webhook(url=webhook_url)
+        logger.info(f"Webhook set to: {webhook_url}")
+
+    asyncio.run(setup_webhook())
+
+    # Run Flask app (Render will use PORT environment variable)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
